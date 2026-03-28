@@ -1,255 +1,415 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Cpu, Users, RotateCcw, Trophy, Skull, Handshake, Info } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Cpu, Users, Globe, RotateCcw, Trophy, Skull, Info, Copy, Check } from 'lucide-react';
+import Peer from 'peerjs';
 
-const ROWS = 6;
-const COLS = 7;
+// --- GAME LOGIC & CONSTANTS ---
+const SIZE = 7;
 const EMPTY = 0;
-const PLAYER_1 = 1; 
-const PLAYER_2 = 2; 
-const WIN_SCORE = 1000000;
-const CENTER_WEIGHT = 3;
+const P1 = 1; // Cyan
+const P2 = 2; // Magenta
 
-const createEmptyBoard = () => Array.from({ length: ROWS }, () => Array(COLS).fill(EMPTY));
-
-const getValidLocations = (board) => {
-  const validLocations = [];
-  for (let col = 0; col < COLS; col++) {
-    if (board[0][col] === EMPTY) validLocations.push(col);
-  }
-  return validLocations;
+const createInitialBoard = () => {
+  const b = Array.from({ length: SIZE }, () => Array(SIZE).fill(EMPTY));
+  b[0][0] = P1; b[SIZE - 1][SIZE - 1] = P1;
+  b[0][SIZE - 1] = P2; b[SIZE - 1][0] = P2;
+  return b;
 };
 
-const getNextOpenRow = (board, col) => {
-  for (let r = ROWS - 1; r >= 0; r--) {
-    if (board[r][col] === EMPTY) return r;
+const getScores = (board) => {
+  let p1 = 0, p2 = 0;
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      if (board[r][c] === P1) p1++;
+      if (board[r][c] === P2) p2++;
+    }
   }
-  return -1;
+  return { p1, p2 };
 };
 
-const hasWon = (board, piece) => {
-  for (let c = 0; c < COLS - 3; c++) {
-    for (let r = 0; r < ROWS; r++) {
-      if (board[r][c] === piece && board[r][c + 1] === piece && board[r][c + 2] === piece && board[r][c + 3] === piece) return true;
+const getValidMovesForPiece = (board, r, c) => {
+  const moves = [];
+  for (let dr = -2; dr <= 2; dr++) {
+    for (let dc = -2; dc <= 2; dc++) {
+      const nr = r + dr; const nc = c + dc;
+      if (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && board[nr][nc] === EMPTY) {
+        moves.push({ r: nr, c: nc, isClone: Math.abs(dr) <= 1 && Math.abs(dc) <= 1 });
+      }
     }
   }
-  for (let c = 0; c < COLS; c++) {
-    for (let r = 0; r < ROWS - 3; r++) {
-      if (board[r][c] === piece && board[r + 1][c] === piece && board[r + 2][c] === piece && board[r + 3][c] === piece) return true;
-    }
-  }
-  for (let c = 0; c < COLS - 3; c++) {
-    for (let r = 0; r < ROWS - 3; r++) {
-      if (board[r][c] === piece && board[r + 1][c + 1] === piece && board[r + 2][c + 2] === piece && board[r + 3][c + 3] === piece) return true;
-    }
-  }
-  for (let c = 0; c < COLS - 3; c++) {
-    for (let r = 3; r < ROWS; r++) {
-      if (board[r][c] === piece && board[r - 1][c + 1] === piece && board[r - 2][c + 2] === piece && board[r - 3][c + 3] === piece) return true;
-    }
-  }
-  return false;
+  return moves;
 };
 
-const getWinCoords = (board, piece) => {
-  for (let c = 0; c < COLS - 3; c++) {
-    for (let r = 0; r < ROWS; r++) {
-      if (board[r][c] === piece && board[r][c + 1] === piece && board[r][c + 2] === piece && board[r][c + 3] === piece) 
-        return [[r,c], [r,c+1], [r,c+2], [r,c+3]];
+const getAllValidMoves = (board, player) => {
+  const moves = [];
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      if (board[r][c] === player) {
+        const pieceMoves = getValidMovesForPiece(board, r, c);
+        pieceMoves.forEach(m => moves.push({ fromR: r, fromC: c, toR: m.r, toC: m.c, isClone: m.isClone }));
+      }
     }
   }
-  for (let c = 0; c < COLS; c++) {
-    for (let r = 0; r < ROWS - 3; r++) {
-      if (board[r][c] === piece && board[r + 1][c] === piece && board[r + 2][c] === piece && board[r + 3][c] === piece) 
-        return [[r,c], [r+1,c], [r+2,c], [r+3,c]];
-    }
-  }
-  for (let c = 0; c < COLS - 3; c++) {
-    for (let r = 0; r < ROWS - 3; r++) {
-      if (board[r][c] === piece && board[r + 1][c + 1] === piece && board[r + 2][c + 2] === piece && board[r + 3][c + 3] === piece) 
-        return [[r,c], [r+1,c+1], [r+2,c+2], [r+3,c+3]];
-    }
-  }
-  for (let c = 0; c < COLS - 3; c++) {
-    for (let r = 3; r < ROWS; r++) {
-      if (board[r][c] === piece && board[r - 1][c + 1] === piece && board[r - 2][c + 2] === piece && board[r - 3][c + 3] === piece) 
-        return [[r,c], [r-1,c+1], [r-2,c+2], [r-3,c+3]];
-    }
-  }
-  return null;
+  return moves;
 };
 
-const evaluateWindow = (window, piece) => {
-  let score = 0;
-  const oppPiece = piece === PLAYER_1 ? PLAYER_2 : PLAYER_1;
-  let pieceCount = 0, emptyCount = 0, oppCount = 0;
-  for (let i = 0; i < 4; i++) {
-    if (window[i] === piece) pieceCount++;
-    else if (window[i] === EMPTY) emptyCount++;
-    else if (window[i] === oppPiece) oppCount++;
+const applyMove = (board, move, player) => {
+  const nb = board.map(row => [...row]);
+  if (!move.isClone) nb[move.fromR][move.fromC] = EMPTY;
+  nb[move.toR][move.toC] = player;
+  const opp = player === P1 ? P2 : P1;
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      const nr = move.toR + dr, nc = move.toC + dc;
+      if (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && nb[nr][nc] === opp) {
+        nb[nr][nc] = player;
+      }
+    }
   }
-  if (pieceCount === 4) score += 100;
-  else if (pieceCount === 3 && emptyCount === 1) score += 5;
-  else if (pieceCount === 2 && emptyCount === 2) score += 2;
-  if (oppCount === 3 && emptyCount === 1) score -= 40;
-  return score;
+  return nb;
 };
 
-const scorePosition = (board, piece) => {
-  let score = 0;
-  const centerArray = [];
-  for (let r = 0; r < ROWS; r++) centerArray.push(board[r][Math.floor(COLS / 2)]);
-  score += (centerArray.filter(p => p === piece).length) * CENTER_WEIGHT;
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS - 3; c++) score += evaluateWindow(board[r].slice(c, c + 4), piece);
-  }
-  for (let c = 0; c < COLS; c++) {
-    const colArray = [];
-    for (let r = 0; r < ROWS; r++) colArray.push(board[r][c]);
-    for (let r = 0; r < ROWS - 3; r++) score += evaluateWindow(colArray.slice(r, r + 4), piece);
-  }
-  for (let r = 0; r < ROWS - 3; r++) {
-    for (let c = 0; c < COLS - 3; c++) score += evaluateWindow([board[r][c], board[r+1][c+1], board[r+2][c+2], board[r+3][c+3]], piece);
-  }
-  for (let r = 0; r < ROWS - 3; r++) {
-    for (let c = 0; c < COLS - 3; c++) score += evaluateWindow([board[r+3][c], board[r+2][c+1], board[r+1][c+2], board[r][c+3]], piece);
-  }
-  return score;
+// --- AI (Minimax) ---
+const evaluateBoard = (board, player) => {
+  const { p1, p2 } = getScores(board);
+  return player === P2 ? p2 - p1 : p1 - p2;
 };
 
-const minimax = (board, depth, alpha, beta, maximizingPlayer) => {
-  const vLocs = getValidLocations(board);
-  const isTerminal = hasWon(board, PLAYER_1) || hasWon(board, PLAYER_2) || vLocs.length === 0;
-  if (depth === 0 || isTerminal) {
-    if (isTerminal) {
-      if (hasWon(board, PLAYER_2)) return { score: WIN_SCORE };
-      if (hasWon(board, PLAYER_1)) return { score: -WIN_SCORE };
-      return { score: 0 };
+const minimax = (board, depth, alpha, beta, isMaximizing, aiPlayer) => {
+  const currentPlayer = isMaximizing ? aiPlayer : (aiPlayer === P1 ? P2 : P1);
+  const moves = getAllValidMoves(board, currentPlayer);
+  
+  if (depth === 0 || moves.length === 0) return { score: evaluateBoard(board, aiPlayer) };
+
+  let bestMove = moves[0];
+  if (isMaximizing) {
+    let maxEval = -Infinity;
+    for (let m of moves) {
+      const nb = applyMove(board, m, currentPlayer);
+      const ev = minimax(nb, depth - 1, alpha, beta, false, aiPlayer).score;
+      if (ev > maxEval) { maxEval = ev; bestMove = m; }
+      alpha = Math.max(alpha, ev);
+      if (beta <= alpha) break;
     }
-    return { score: scorePosition(board, PLAYER_2) };
-  }
-  if (maximizingPlayer) {
-    let value = -Infinity;
-    let bestCol = vLocs[0];
-    for (let col of vLocs) {
-      const row = getNextOpenRow(board, col);
-      const bCopy = board.map(r => [...r]);
-      bCopy[row][col] = PLAYER_2;
-      const newScore = minimax(bCopy, depth - 1, alpha, beta, false).score;
-      if (newScore > value) { value = newScore; bestCol = col; }
-      alpha = Math.max(alpha, value);
-      if (alpha >= beta) break;
-    }
-    return { col: bestCol, score: value };
+    return { score: maxEval, move: bestMove };
   } else {
-    let value = Infinity;
-    let bestCol = vLocs[0];
-    for (let col of vLocs) {
-      const row = getNextOpenRow(board, col);
-      const bCopy = board.map(r => [...r]);
-      bCopy[row][col] = PLAYER_1;
-      const newScore = minimax(bCopy, depth - 1, alpha, beta, true).score;
-      if (newScore < value) { value = newScore; bestCol = col; }
-      beta = Math.min(beta, value);
-      if (alpha >= beta) break;
+    let minEval = Infinity;
+    for (let m of moves) {
+      const nb = applyMove(board, m, currentPlayer);
+      const ev = minimax(nb, depth - 1, alpha, beta, true, aiPlayer).score;
+      if (ev < minEval) { minEval = ev; bestMove = m; }
+      beta = Math.min(beta, ev);
+      if (beta <= alpha) break;
     }
-    return { col: bestCol, score: value };
+    return { score: minEval, move: bestMove };
   }
 };
 
+// --- MAIN COMPONENT ---
 export default function App() {
-  const [board, setBoard] = useState(createEmptyBoard());
-  const [currentPlayer, setCurrentPlayer] = useState(PLAYER_1);
-  const [winner, setWinner] = useState(null); 
-  const [winningCells, setWinningCells] = useState([]);
-  const [showResultOverlay, setShowResultOverlay] = useState(false);
-  const [gameMode, setGameMode] = useState('menu'); 
+  const [board, setBoard] = useState(createInitialBoard());
+  const [turn, setTurn] = useState(P1);
+  const [selected, setSelected] = useState(null);
+  const [validMoves, setValidMoves] = useState([]);
+  const [winner, setWinner] = useState(null);
+  const [mode, setMode] = useState('menu'); // menu, ai, local, host, join, online
   const [aiThinking, setAiThinking] = useState(false);
+  
+  // Multiplayer State
+  const [peerId, setPeerId] = useState('');
+  const [joinId, setJoinId] = useState('');
+  const [connection, setConnection] = useState(null);
+  const [isOnlineHost, setIsOnlineHost] = useState(false);
+  const [onlineStatus, setOnlineStatus] = useState('');
+  const [copied, setCopied] = useState(false);
+  const peerRef = useRef(null);
 
+  const { p1: score1, p2: score2 } = getScores(board);
+
+  // Check Game Over
   useEffect(() => {
-    if (winner) {
-      const delay = winner === 'draw' ? 500 : 2500;
-      const timer = setTimeout(() => setShowResultOverlay(true), delay);
-      return () => clearTimeout(timer);
-    }
-  }, [winner]);
+    if (mode === 'menu') return;
+    const p1Moves = getAllValidMoves(board, P1);
+    const p2Moves = getAllValidMoves(board, P2);
+    if (p1Moves.length === 0 || p2Moves.length === 0 || score1 === 0 || score2 === 0 || score1 + score2 === SIZE * SIZE) {
+      if (score1 > score2) setWinner(P1);
+      else if (score2 > score1) setWinner(P2);
+      else setWinner('draw');
+    } else if (turn === P1 && p1Moves.length === 0) { setTurn(P2); } 
+      else if (turn === P2 && p2Moves.length === 0) { setTurn(P1); }
+  }, [board, turn, score1, score2, mode]);
 
-  const handleMove = useCallback((col) => {
-    if (winner || aiThinking || gameMode === 'menu') return;
-    const vLocs = getValidLocations(board);
-    if (!vLocs.includes(col)) return;
-    const row = getNextOpenRow(board, col);
-    const newBoard = board.map(r => [...r]);
-    newBoard[row][col] = currentPlayer;
-    setBoard(newBoard);
-    const winCoords = getWinCoords(newBoard, currentPlayer);
-    if (winCoords) { setWinningCells(winCoords); setWinner(currentPlayer); } 
-    else if (getValidLocations(newBoard).length === 0) setWinner('draw');
-    else setCurrentPlayer(currentPlayer === PLAYER_1 ? PLAYER_2 : PLAYER_1);
-  }, [board, currentPlayer, winner, aiThinking, gameMode]);
-
+  // AI Turn
   useEffect(() => {
-    if (gameMode === 'ai' && currentPlayer === PLAYER_2 && !winner) {
+    if (mode === 'ai' && turn === P2 && !winner) {
       setAiThinking(true);
-      setTimeout(() => {
-        const res = minimax(board, 5, -Infinity, Infinity, true);
-        if (res.col !== undefined) {
-          const row = getNextOpenRow(board, res.col);
-          const newBoard = board.map(r => [...r]);
-          newBoard[row][res.col] = PLAYER_2;
-          setBoard(newBoard);
-          const winCoords = getWinCoords(newBoard, PLAYER_2);
-          if (winCoords) { setWinningCells(winCoords); setWinner(PLAYER_2); }
-          else if (getValidLocations(newBoard).length === 0) setWinner('draw');
-          else setCurrentPlayer(PLAYER_1);
+      const timer = setTimeout(() => {
+        const result = minimax(board, 3, -Infinity, Infinity, true, P2);
+        if (result.move) {
+          setBoard(applyMove(board, result.move, P2));
+          setTurn(P1);
         }
         setAiThinking(false);
-      }, 300);
+      }, 500);
+      return () => clearTimeout(timer);
     }
-  }, [currentPlayer, gameMode, winner, board]);
+  }, [board, turn, mode, winner]);
 
-  const resetGame = () => { setBoard(createEmptyBoard()); setCurrentPlayer(PLAYER_1); setWinner(null); setWinningCells([]); setShowResultOverlay(false); };
-  const returnToMenu = () => { resetGame(); setGameMode('menu'); };
+  // Handle Cell Click
+  const handleCellClick = (r, c) => {
+    if (winner || aiThinking || mode === 'menu') return;
+    if (mode === 'online') {
+      if ((isOnlineHost && turn !== P1) || (!isOnlineHost && turn !== P2)) return; // Not your turn
+    }
+
+    // Select Piece
+    if (board[r][c] === turn) {
+      setSelected({ r, c });
+      setValidMoves(getValidMovesForPiece(board, r, c));
+      return;
+    }
+
+    // Move Piece
+    if (selected) {
+      const move = validMoves.find(m => m.r === r && m.c === c);
+      if (move) {
+        const fullMove = { fromR: selected.r, fromC: selected.c, toR: r, toC: c, isClone: move.isClone };
+        const newBoard = applyMove(board, fullMove, turn);
+        setBoard(newBoard);
+        setTurn(turn === P1 ? P2 : P1);
+        setSelected(null);
+        setValidMoves([]);
+        
+        // Send move if online
+        if (mode === 'online' && connection) {
+          connection.send({ type: 'move', move: fullMove, player: turn });
+        }
+      } else {
+        setSelected(null);
+        setValidMoves([]);
+      }
+    }
+  };
+
+  // --- PEER JS NETWORKING ---
+  const generateId = () => Math.random().toString(36).substring(2, 6).toUpperCase();
+
+  const initPeer = (host) => {
+    const id = host ? generateId() : null;
+    const peer = new Peer(id);
+    peerRef.current = peer;
+
+    peer.on('open', (id) => {
+      setPeerId(id);
+      setOnlineStatus(host ? 'Waiting for opponent...' : 'Ready to join.');
+    });
+
+    peer.on('connection', (conn) => {
+      setupConnection(conn, true);
+    });
+  };
+
+  const setupConnection = (conn, isHost) => {
+    setConnection(conn);
+    setOnlineStatus('Connected! Game On.');
+    setIsOnlineHost(isHost);
+    setMode('online');
+    setBoard(createInitialBoard());
+    setTurn(P1);
+    setWinner(null);
+
+    conn.on('data', (data) => {
+      if (data.type === 'move') {
+        setBoard(prev => applyMove(prev, data.move, data.player));
+        setTurn(data.player === P1 ? P2 : P1);
+      } else if (data.type === 'reset') {
+        setBoard(createInitialBoard());
+        setTurn(P1);
+        setWinner(null);
+      }
+    });
+
+    conn.on('close', () => {
+      setOnlineStatus('Opponent disconnected.');
+      setConnection(null);
+    });
+  };
+
+  const joinGame = () => {
+    if (!peerRef.current || !joinId) return;
+    setOnlineStatus('Connecting...');
+    const conn = peerRef.current.connect(joinId.toUpperCase());
+    conn.on('open', () => setupConnection(conn, false));
+    conn.on('error', () => setOnlineStatus('Connection failed.'));
+  };
+
+  const copyId = () => {
+    navigator.clipboard.writeText(peerId);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Utilities
+  const resetGame = () => {
+    setBoard(createInitialBoard());
+    setTurn(P1);
+    setWinner(null);
+    setSelected(null);
+    setValidMoves([]);
+    if (mode === 'online' && connection) connection.send({ type: 'reset' });
+  };
+
+  const returnToMenu = () => {
+    resetGame();
+    setMode('menu');
+    if (connection) connection.close();
+    if (peerRef.current) peerRef.current.destroy();
+    setConnection(null);
+  };
+
+  // Renderers
+  const isMoveValid = (r, c) => validMoves.some(m => m.r === r && m.c === c);
+  const getMoveType = (r, c) => validMoves.find(m => m.r === r && m.c === c)?.isClone;
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center font-sans text-slate-100 p-4 select-none overflow-hidden relative">
-      <style>{`@keyframes blink { 0%, 100% { opacity: 1; transform: scale(1.1); } 50% { opacity: 0.1; transform: scale(0.9); } } .animate-win-blink { animation: blink 0.6s ease-in-out 4 forwards; }`}</style>
-      <div className="mb-6 z-10 text-center">
-        <h1 className="text-4xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-fuchsia-500 uppercase drop-shadow-[0_0_15px_rgba(6,182,212,0.5)]">Neon Gridlock</h1>
-        {gameMode === 'menu' ? <div className="mt-4 p-3 bg-slate-900/80 border border-slate-700 rounded-lg text-sm"><strong>GOAL:</strong> Connect 4 in a row.</div> : <div className="mt-2 text-slate-400 font-bold uppercase tracking-widest text-xs">Goal: Connect 4 in a row</div>}
+      <style>{`
+        @keyframes pulse-ring { 0% { transform: scale(0.8); opacity: 0.5; } 100% { transform: scale(1.3); opacity: 0; } }
+        .win-glow { animation: blink 1s infinite alternate; }
+        @keyframes blink { from { filter: brightness(1); } to { filter: brightness(1.5) drop-shadow(0 0 10px currentColor); } }
+      `}</style>
+
+      {/* HEADER */}
+      <div className="mb-6 z-10 text-center w-full max-w-md">
+        <h1 className="text-4xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-fuchsia-500 uppercase drop-shadow-[0_0_15px_rgba(6,182,212,0.5)]">Neon Assimilation</h1>
+        
+        {mode === 'menu' && (
+          <div className="mt-4 p-3 bg-slate-900/80 border border-slate-700 rounded-lg text-sm text-left">
+             <div className="flex items-start gap-2 mb-2"><Info className="text-cyan-400 shrink-0" size={18} /><span><strong>GOAL:</strong> Have the most pieces.</span></div>
+             <ul className="list-disc pl-8 space-y-1 text-slate-400 text-xs">
+               <li>Move 1 space: Clone (Create a new piece).</li>
+               <li>Move 2 spaces: Jump (Move existing piece).</li>
+               <li>Captures adjacent enemy pieces upon landing!</li>
+             </ul>
+          </div>
+        )}
+
+        {mode !== 'menu' && !['host', 'join'].includes(mode) && (
+          <div className="mt-4 flex items-center justify-between bg-slate-900/50 p-3 rounded-2xl border border-slate-800">
+            <div className={`flex flex-col items-center px-4 py-2 rounded-xl transition-all ${turn === P1 ? 'bg-cyan-500/20 shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'opacity-50'}`}>
+              <span className="text-cyan-400 font-bold text-xl">{score1}</span>
+              <span className="text-xs uppercase tracking-widest text-cyan-500/80">{mode === 'online' && isOnlineHost ? 'YOU' : 'P1'}</span>
+            </div>
+            <div className="text-slate-600 font-black tracking-widest text-sm">VS</div>
+            <div className={`flex flex-col items-center px-4 py-2 rounded-xl transition-all ${turn === P2 ? 'bg-fuchsia-500/20 shadow-[0_0_15px_rgba(217,70,239,0.4)]' : 'opacity-50'}`}>
+              <span className="text-fuchsia-400 font-bold text-xl">{score2}</span>
+              <span className="text-xs uppercase tracking-widest text-fuchsia-500/80">{mode === 'ai' ? (aiThinking ? 'AI...' : 'AI') : (mode === 'online' && !isOnlineHost ? 'YOU' : 'P2')}</span>
+            </div>
+          </div>
+        )}
       </div>
-      {gameMode === 'menu' && (
-        <div className="flex flex-col gap-4 w-full max-w-sm z-10">
-          <button onClick={() => { setGameMode('ai'); resetGame(); }} className="py-4 bg-slate-900 border border-cyan-500/50 rounded-xl text-cyan-400 font-bold tracking-widest hover:bg-cyan-950">PLAY VS COMPUTER</button>
-          <button onClick={() => { setGameMode('p2p'); resetGame(); }} className="py-4 bg-slate-900 border border-fuchsia-500/50 rounded-xl text-fuchsia-400 font-bold tracking-widest hover:bg-fuchsia-950">PLAY LOCAL P2P</button>
+
+      {/* MENUS */}
+      {mode === 'menu' && (
+        <div className="flex flex-col gap-3 w-full max-w-sm z-10">
+          <button onClick={() => { setMode('ai'); resetGame(); }} className="flex items-center justify-center gap-3 py-4 bg-slate-900 border border-cyan-500/50 rounded-xl text-cyan-400 font-bold tracking-widest hover:bg-cyan-950 transition-all"><Cpu size={20}/> VS COMPUTER (HARD)</button>
+          <button onClick={() => { setMode('local'); resetGame(); }} className="flex items-center justify-center gap-3 py-4 bg-slate-900 border border-fuchsia-500/50 rounded-xl text-fuchsia-400 font-bold tracking-widest hover:bg-fuchsia-950 transition-all"><Users size={20}/> LOCAL HOTSEAT</button>
+          <div className="h-px w-full bg-slate-800 my-2"></div>
+          <button onClick={() => { setMode('host'); initPeer(true); }} className="flex items-center justify-center gap-3 py-4 bg-slate-900 border border-emerald-500/50 rounded-xl text-emerald-400 font-bold tracking-widest hover:bg-emerald-950 transition-all"><Globe size={20}/> HOST ONLINE</button>
+          <button onClick={() => { setMode('join'); initPeer(false); }} className="flex items-center justify-center gap-3 py-4 bg-slate-900 border border-amber-500/50 rounded-xl text-amber-400 font-bold tracking-widest hover:bg-amber-950 transition-all"><Globe size={20}/> JOIN ONLINE</button>
         </div>
       )}
-      {gameMode !== 'menu' && (
-        <div className="w-full max-w-2xl bg-slate-900/80 p-3 rounded-2xl border border-slate-800 shadow-2xl z-10">
-          <div className="grid grid-cols-7 gap-1 md:gap-2">
-            {Array.from({ length: COLS }).map((_, c) => (
-              <div key={c} className="flex flex-col gap-1 cursor-pointer" onClick={() => handleMove(c)}>
-                {board.map((r, ri) => {
-                  const isWin = winningCells.some(([wr, wc]) => wr === ri && wc === c);
-                  return (
-                    <div key={ri} className={`w-full aspect-square bg-slate-950 rounded-full border-2 border-slate-800 flex items-center justify-center relative ${isWin ? 'ring-2 ring-white z-20 scale-105' : ''} ${winner && !isWin ? 'opacity-10 grayscale' : ''}`}>
-                      {board[ri][c] !== EMPTY && <div className={`w-[85%] h-[85%] rounded-full ${board[ri][c] === PLAYER_1 ? 'bg-cyan-500 shadow-[0_0_10px_cyan]' : 'bg-fuchsia-500 shadow-[0_0_10px_fuchsia]'} ${isWin ? 'animate-win-blink' : ''}`} />}
-                    </div>
-                  );
-                })}
+
+      {/* MULTIPLAYER LOBBY */}
+      {['host', 'join'].includes(mode) && (
+        <div className="flex flex-col gap-4 w-full max-w-sm z-10 bg-slate-900 p-6 rounded-2xl border border-slate-700 text-center">
+          <Globe className="mx-auto text-slate-500 mb-2" size={48} />
+          <p className="text-emerald-400 font-bold tracking-wider">{onlineStatus}</p>
+          
+          {mode === 'host' && peerId && (
+            <div className="mt-4">
+              <p className="text-slate-400 text-xs uppercase tracking-widest mb-2">Your Room Code</p>
+              <div className="flex items-center justify-center gap-2 text-4xl font-black text-white tracking-widest bg-slate-950 py-4 rounded-xl border border-slate-800">
+                {peerId}
+                <button onClick={copyId} className="ml-2 p-2 bg-slate-800 rounded-lg hover:bg-slate-700 text-slate-300">
+                  {copied ? <Check size={20} className="text-emerald-400"/> : <Copy size={20} />}
+                </button>
               </div>
-            ))}
+            </div>
+          )}
+
+          {mode === 'join' && (
+            <div className="mt-4 flex flex-col gap-2">
+               <p className="text-slate-400 text-xs uppercase tracking-widest mb-1">Enter Room Code</p>
+               <input type="text" maxLength={4} value={joinId} onChange={e => setJoinId(e.target.value.toUpperCase())} className="w-full bg-slate-950 border border-slate-800 rounded-xl py-4 text-center text-4xl font-black text-white focus:outline-none focus:border-amber-500 transition-colors uppercase" placeholder="ABCD" />
+               <button onClick={joinGame} disabled={joinId.length !== 4} className="mt-2 py-4 bg-amber-500/20 text-amber-400 border border-amber-500/50 font-bold rounded-xl tracking-widest disabled:opacity-50">CONNECT</button>
+            </div>
+          )}
+
+          <button onClick={returnToMenu} className="mt-4 text-slate-500 text-sm hover:text-white">Cancel</button>
+        </div>
+      )}
+
+      {/* GAME BOARD */}
+      {!['menu', 'host', 'join'].includes(mode) && (
+        <div className="w-full max-w-lg bg-slate-900/80 p-2 md:p-4 rounded-2xl border border-slate-800 shadow-2xl z-10">
+          <div className="grid grid-cols-7 gap-1 md:gap-2">
+            {board.map((row, r) => row.map((cell, c) => {
+              const isSelected = selected?.r === r && selected?.c === c;
+              const validMove = isMoveValid(r, c);
+              const moveClone = validMove && getMoveType(r, c);
+              
+              return (
+                <div key={`${r}-${c}`} onClick={() => handleCellClick(r, c)} className={`w-full aspect-square rounded-xl flex items-center justify-center relative transition-all duration-300
+                  ${cell === EMPTY ? 'bg-slate-950 border border-slate-800' : 'bg-slate-800 border-2 border-transparent'}
+                  ${isSelected ? 'ring-2 ring-white scale-90' : ''}
+                  ${validMove ? 'cursor-pointer ring-1 ring-emerald-500/50 bg-emerald-900/20 hover:bg-emerald-800/40' : (cell !== EMPTY ? 'cursor-pointer' : '')}
+                `}>
+                  
+                  {/* Valid Move Indicator */}
+                  {validMove && (
+                    <div className={`w-3 h-3 rounded-full ${moveClone ? 'bg-emerald-400' : 'bg-amber-400'} opacity-50 absolute`} />
+                  )}
+
+                  {/* Piece */}
+                  {cell !== EMPTY && (
+                    <div className={`w-[80%] h-[80%] rounded-full shadow-inner transition-colors duration-500 relative
+                      ${cell === P1 ? 'bg-cyan-500 shadow-[0_0_15px_rgba(6,182,212,0.6)] text-cyan-400' : 'bg-fuchsia-500 shadow-[0_0_15px_rgba(217,70,239,0.6)] text-fuchsia-400'}
+                      ${winner === cell ? 'win-glow' : ''}
+                    `}>
+                      {isSelected && <div className="absolute inset-0 rounded-full border-2 border-white animate-ping opacity-50"></div>}
+                    </div>
+                  )}
+                </div>
+              );
+            }))}
           </div>
         </div>
       )}
-      {showResultOverlay && (
-        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950/95 p-4 text-center backdrop-blur-md">
-          <h2 className="text-6xl font-black text-white mb-8">{winner === 'draw' ? 'DRAW' : (winner === PLAYER_1 ? 'YOU WIN!' : 'YOU LOSE!') }</h2>
-          <div className="flex flex-col sm:flex-row gap-4 w-full max-w-sm">
-            <button onClick={resetGame} className="flex-1 py-4 bg-white text-black font-bold rounded-xl">PLAY AGAIN</button>
-            <button onClick={returnToMenu} className="flex-1 py-4 bg-slate-800 text-white font-bold rounded-xl">MENU</button>
+
+      {/* FOOTER CONTROLS */}
+      {!['menu', 'host', 'join'].includes(mode) && !winner && (
+        <div className="mt-8 flex gap-4 z-10">
+          <button onClick={resetGame} className="p-3 text-slate-500 hover:text-white hover:bg-slate-800 rounded-full transition-all"><RotateCcw size={20} /></button>
+          <button onClick={returnToMenu} className="px-6 py-2 text-sm font-bold tracking-widest text-slate-500 hover:text-white hover:bg-slate-800 rounded-full transition-all border border-slate-800">ABORT MISSION</button>
+        </div>
+      )}
+
+      {/* WIN OVERLAY */}
+      {winner && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950/90 p-4 text-center backdrop-blur-md animate-in fade-in zoom-in duration-300">
+          <div className="bg-slate-900 border border-slate-700 p-8 rounded-3xl shadow-2xl flex flex-col items-center max-w-sm w-full">
+            <Trophy size={64} className={`mb-6 ${winner === P1 ? 'text-cyan-400' : winner === P2 ? 'text-fuchsia-400' : 'text-slate-400'}`} />
+            <h2 className={`text-5xl font-black mb-2 tracking-tighter ${winner === P1 ? 'text-cyan-400' : winner === P2 ? 'text-fuchsia-400' : 'text-slate-300'}`}>
+              {winner === 'draw' ? 'DRAW' : (winner === P1 ? 'P1 WINS' : 'P2 WINS')}
+            </h2>
+            <p className="text-slate-500 mb-8 uppercase tracking-widest font-bold">Score: {score1} - {score2}</p>
+            <div className="flex flex-col w-full gap-3">
+              <button onClick={resetGame} className="w-full py-4 bg-white text-black font-bold rounded-xl tracking-widest hover:bg-slate-200">PLAY AGAIN</button>
+              <button onClick={returnToMenu} className="w-full py-4 bg-slate-800 text-white font-bold rounded-xl border border-slate-600 tracking-widest">MENU</button>
+            </div>
           </div>
         </div>
       )}
     </div>
   );
-}
+  }
